@@ -1,15 +1,19 @@
 
 
 
-#include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
 
 #define SERVER_PORT    9000
+
+
+
+
+
+
 
 int main() {
 
@@ -72,27 +76,15 @@ int main() {
     }
 
 
-    /*--------for test--------*/
-    ssize_t read_bytes = read(clientfd, buffer, sizeof(buffer));
-    while(1) {
-        printf("received from client: %s\n", buffer);
-        // check client thread write.....
-    }
-    printf("client disconnectd.\n");
-
-
-
-/*
-    //received and send msg
     read(clientfd, buffer, sizeof(buffer));
     printf("%s\n", buffer);
     write(clientfd, message, sizeof(message));
-*/
 
 
     //close connections
     close(clientfd);
     close(serverfd);
+    printf("server socket closed\n");
 
     return 0;
 }

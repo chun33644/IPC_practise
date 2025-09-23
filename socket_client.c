@@ -1,7 +1,6 @@
 
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -11,9 +10,8 @@
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 9000
 
-int sock;  //for test thread use
 
-
+/*
 void *thread_send_data(void *arg) {
 
     char msg[50];
@@ -23,21 +21,19 @@ void *thread_send_data(void *arg) {
     for (int idx = 0; idx < 5; idx ++) {
         sprintf(msg, "message from thread : %d, count : %d\n", thread_id, idx);
         write(sock, msg, strlen(msg));
-        usleep(100000);  //delay
+        sleep(3);
     }
 
     return NULL;
 }
-
+*/
 
 
 int main () {
-    //int sock;
+    int sock;
     struct sockaddr_in server_addr;
-/*
     char message[] ="Hello, server!";
     char buffer[1024];
-*/
 
     //create socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -60,9 +56,9 @@ int main () {
     }
 
 
-    /*----for test----*/
-    printf("connected to server. starting threads to send data.....\n");
 
+    printf("connected to server. starting threads to send data.....\n");
+/*/
     pthread_t t1, t2;
     int *id1 = malloc(sizeof(int));
     *id1 = 1;
@@ -75,23 +71,18 @@ int main () {
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     printf("join finished\n");
+*/
 
-
-    /*----------------*/
-
-
-    /*
     //send msg
     write(sock, message, sizeof(message));
 
     //received msg
     read(sock, buffer, sizeof(buffer));
     printf("Received from server: %s\n", buffer);
-    */
 
     //close connections
     close(sock);
-    printf("sock closed\n");
+    printf("client socket closed\n");
 
     return 0;
 }

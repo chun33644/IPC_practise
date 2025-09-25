@@ -20,32 +20,21 @@ struct sockaddr_un addrs;
  *  };
 */
 
+
 pthread_t pid_1;
 pthread_t pid_2;
-//pthread_t pid_3;
 
-
+static char buff[100];
 
 ssize_t recv_task() {
 
     //ssize_t recv(int sockfd, void buf[size], size_t size, int flags);
-    char buff[100];
+    memset(&buff, 0, sizeof(buff));
     ssize_t recv_bytes = recv(cli_fd, buff, sizeof(buff), 0);
-    printf("recv byte : %zd\n", recv_bytes);
-
+    printf("%s\n", buff);
     return recv_bytes;
 }
 
-
-
-ssize_t write_task() {
-
-    //ssize_t write(int fd, const void buf[count], size_t count);
-    char *msg = "[write]this msg from client send.";
-    ssize_t write_bytes = write(cli_fd, msg, strlen(msg));
-
-    return write_bytes;
-}
 
 
 ssize_t send_task() {
@@ -53,46 +42,27 @@ ssize_t send_task() {
     //ssize_t send(int sockfd, const void buf[size], size_t size, int flags);
     char *msg = "[send]this msg from client send.";
     ssize_t send_bytes = send(cli_fd, msg, strlen(msg), 0);
-
     return send_bytes;
 }
 
 
 
 
-void* cli_p1_handler(void *arg) {
+void* send_msg_to_server(void *arg) {
 
-/*
-    while(1) {
-
-        ssize_t bytes = send_task();
-        if (bytes < 0) {
-            return NULL;
-        }
-        sleep(5);
-    }
-*/
-
-    for (int idx = 0; idx < 5; idx ++) {
-        ssize_t res = send_task();
-        if (res < 0) {
-            printf("%s error\n", __func__);
-            return NULL;
-        }
+    while (1) {
+        send_task();
         sleep(3);
+
     }
-    return NULL;
+   return NULL;
 }
 
 
-void* cli_p2_handler(void *arg) {
+void* recv_msg_from_server(void *arg) {
 
     while(1) {
-        ssize_t bytes = write_task();
-        if (bytes < 0) {
-            return NULL;
-        }
-        sleep(3);
+        recv_task();
     }
     return NULL;
 }
@@ -126,14 +96,12 @@ int main() {
     //UDS init
     client_sock_init();
 
-    //thread_1 : send info to server[for + send]
-    int p1_res = pthread_create(&pid_1, NULL, cli_p1_handler, NULL);
+    int p1_res = pthread_create(&pid_1, NULL, send_msg_to_server, NULL);
     if (p1_res != 0) {
         perror("thread 1 create fail");
     }
 
-    //thread_2 : send info to server[loop + write]
-    int p2_res = pthread_create(&pid_2, NULL, cli_p2_handler, NULL);
+    int p2_res = pthread_create(&pid_2, NULL, recv_msg_from_server, NULL);
     if (p2_res != 0) {
         perror("thread 2 create fail");
     }

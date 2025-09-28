@@ -30,3 +30,4 @@ server: $(SERVER_OBJ) $(COMMON_OBJ)
 
 clean:
 	rm -f *.o $(CLIENT_BIN) $(SERVER_BIN)
+	rm UDS_Server_socket

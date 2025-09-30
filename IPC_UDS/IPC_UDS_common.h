@@ -26,11 +26,17 @@ typedef struct _UDS_info {
 } UDS_info;
 
 
+typedef struct _package {
+    int header;
+    char msg[MSG_MAX];
+} package;
+
+
 typedef struct _client_info {
     UDS_info client;
+    package pkg;
     pthread_t r_pid;
     pthread_t s_pid;
-    char msg[MSG_MAX];
     bool in_use;
     int start_flag;
 } client_info;

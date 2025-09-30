@@ -11,7 +11,7 @@
 #include "IPC_UDS_common.h"
 
 #define  SERVER_PATH       "UDS_Server_socket"
-#define  CLI_MAX           2
+#define  CLI_MAX           3
 
 static client_info list[CLI_MAX] = {0};
 
@@ -24,26 +24,25 @@ static char buff[100];
 
 void* send_msg_to_server(void *arg) {
 
-    char msg[100] = {0};
 
     while (1) {
 
         client_info *ptr = (client_info *)arg;
 
-        memset(msg, 0, sizeof(msg));
-        snprintf(msg, 100, "this msg from client %d send.", ptr->client.fd);
+        snprintf(ptr->pkg.msg, 100, "this msg from client %d send.", ptr->client.fd);
 
-        // char *msg = "this msg from client send.";
         if (!ptr->start_flag) {
             break;
         } else if (ptr->start_flag) {
-            ssize_t s_res = send(ptr->client.fd, msg, strlen(msg), 0);
+            ssize_t s_res = send(ptr->client.fd, &ptr->pkg, sizeof(package), 0);
             if (s_res == -1) {
                 perror("Send error");
                 return NULL;
             }
+
+            memset(ptr->pkg.msg, 0, sizeof(package));
             sleep(2);
-           //printf("ready to close .... fd %d", ptr->client.fd);
+            // printf("ready to close .... fd %d", ptr->client.fd);
             //error_handler(ptr);
         }
     }
@@ -59,17 +58,14 @@ void* recv_msg_from_server(void *arg) {
         if (!ptr->start_flag) {
             break;
         } else if (ptr->start_flag) {
-            lock(&mutex, __func__);
-            memset(ptr->msg, 0, sizeof(ptr->msg));
-            unlock(&mutex, __func__);
 
-            ssize_t r_res = recv(ptr->client.fd, ptr->msg, sizeof(ptr->msg), 0);
+            ssize_t r_res = recv(ptr->client.fd, &ptr->pkg, sizeof(package), 0);
             if (r_res < 0) {
                 perror("Recv error");
                 continue;
             }
 
-            printf("%s\n", ptr->msg);
+            printf("%s\n", ptr->pkg.msg);
         }
     }
     return NULL;

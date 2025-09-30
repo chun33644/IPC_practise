@@ -10,15 +10,17 @@
 #include "IPC_UDS_common.h"
 #include "IPC_UDS_server.h"
 
+
 static UDS_info server = {0};
 
 static client_info client_info_list[CLI_MAX] = {0};
 
 static pthread_t pid_1;
+static pthread_t pid_2;
 
 static int stopAll_flag = 1;
 
-//static char temp_buff[MSG_MAX];
+static char temp_buff[MSG_MAX];
 
 static pthread_mutex_t mutex;
 
@@ -97,11 +99,10 @@ static client_info* find_client_space(client_info *list) {
     return NULL;
 }
 
-/* if accept() return error, it will stop all threads. */
+/* if create thread fail, it will stop (join_) thread and (close_) fd */
 void* monitor_connect_task(void *arg) {
 
     while (stopAll_flag) {
-
         int fd = accept(*(int *)arg, NULL, NULL);
         if (fd < 0) {
             perror("Accept error");
@@ -122,18 +123,47 @@ void* monitor_connect_task(void *arg) {
                 return NULL;
             }
             space->in_use = true;
-            printf("fd %d (%s)\n", space->client.fd, __func__);
+            //printf("fd %d (%s)\n", space->client.fd, __func__);
             //addr info .....
         }
     }
+    printf("%s\n", __func__);
     return NULL;
 }
 
+void stop_listen(int *listen_fd) {
+
+    shutdown(*listen_fd, SHUT_RDWR);
+    close(*listen_fd);
+
+}
 
 void* monitor_disconnect_task(void *arg) {
 
+    client_info *ptr = (client_info *)arg;
+    static int count = 0;
 
+    printf("waiting for client to connect within 5 seconds....\n");
 
+    while (stopAll_flag) {
+
+        sleep(5);
+        for (int idx = 0; idx < CLI_MAX; idx ++) {
+            if (!ptr[idx].start_flag) {
+                count ++;
+            }
+        }
+
+        if (count == CLI_MAX) {
+            printf("prepare to close the main thread\n");
+            stopAll_flag = 0;
+            stop_listen(&server.fd);
+        } else if (count < CLI_MAX) {
+            //reset
+            count = 0;
+        }
+    }
+    printf("%s\n", __func__);
     return NULL;
 }
 
@@ -188,12 +218,16 @@ int main() {
         perror("monitor_connect_task thread create failed");
     }
 
-    for (int idx = 0; idx < CLI_MAX; idx++) {
-        printf("fd %d[%d]\n", client_info_list[idx].client.fd, idx);
+    //Thread_2
+    int p2_res = pthread_create(&pid_2, NULL, monitor_disconnect_task, (client_info *)client_info_list);
+    if (p2_res != 0) {
+        perror("monitor_connect_task thread create failed");
     }
 
+    pthread_join(pid_2, NULL);
     pthread_join(pid_1, NULL);
 
+    printf("%s\n", __func__);
     return 0;
 
 }

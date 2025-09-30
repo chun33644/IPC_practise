@@ -42,7 +42,9 @@ void* send_msg_to_server(void *arg) {
                 perror("Send error");
                 return NULL;
             }
-            sleep(1);
+            sleep(2);
+           //printf("ready to close .... fd %d", ptr->client.fd);
+            //error_handler(ptr);
         }
     }
     return NULL;
@@ -66,6 +68,7 @@ void* recv_msg_from_server(void *arg) {
                 perror("Recv error");
                 continue;
             }
+
             printf("%s\n", ptr->msg);
         }
     }

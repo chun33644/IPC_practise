@@ -20,7 +20,7 @@ static pthread_t pid_2;
 
 static int stopAll_flag = 1;
 
-//static client_info global_info = {0}; //test race conditions
+static package global_pkg = {0}; //for test race conditions
 
 static pthread_mutex_t mutex;
 
@@ -29,18 +29,20 @@ void* recv_msg_from_client(void *arg) {
     while (stopAll_flag) {
 
         client_info *ptr = (client_info *)arg;
+        package temp = {0};
+
         if (!ptr->start_flag) {
             break;
         } else if (ptr->start_flag) {
 
-            ssize_t r_bytes = recv(ptr->client.fd, &ptr->pkg, sizeof(package), 0);
+            ssize_t r_bytes = recv(ptr->client.fd, &temp, sizeof(package), 0);
             if (r_bytes == -1) {
                 perror("Recv error");
                 break;
             } else if (r_bytes > 0) {
-                //lock(&mutex, __func__);
-                //memcpy(&global_info, ptr, sizeof(client_info));
-                //unlock(&mutex, __func__);
+                lock(&mutex, __func__);
+                memcpy(&ptr->pkg, &temp, sizeof(package));
+                unlock(&mutex, __func__);
 
                 printf("fd %d mag:%s (bytes:%zd)\n", ptr->client.fd, ptr->pkg.msg, r_bytes);
             } else if (r_bytes == 0) {
@@ -60,11 +62,6 @@ void* send_msg_to_client(void *arg) {
     while (stopAll_flag) {
 
         client_info *ptr = (client_info *)arg;
-
-        //lock(&mutex, __func__);
-        //memcpy(&temp, &global_info, sizeof(client_info));
-        //memset(&global_info, 0, sizeof(client_info));
-        //unlock(&mutex, __func__);
 
         if (!ptr->start_flag) {
             break;

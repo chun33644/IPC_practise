@@ -11,15 +11,13 @@
 #include "IPC_UDS_common.h"
 
 #define  SERVER_PATH       "UDS_Server_socket"
-#define  CLI_MAX           3
+#define  CLI_MAX           6
 
 static client_info list[CLI_MAX] = {0};
 
 static pthread_mutex_t mutex;
 
 static pthread_t pid_1;
-
-static char buff[100];
 
 
 void* send_msg_to_server(void *arg) {
@@ -97,7 +95,7 @@ int create_client_UDS(int *cl_fd, struct sockaddr_un *cl_addr, socklen_t *cl_len
 void* create_multiple_clientfd(void *arg) {
 
     client_info *ptr = (client_info *)arg;
-    printf("for test 1.....\n");
+
     for (int idx = 0; idx < CLI_MAX; idx ++) {
         int res = create_client_UDS(&(ptr[idx].client.fd), &(ptr[idx].client.addr), &(ptr[idx].client.len));
         if (res < 0) {

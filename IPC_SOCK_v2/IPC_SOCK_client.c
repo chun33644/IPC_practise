@@ -1,3 +1,6 @@
+
+#include "IPC_SOCK_config.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -12,14 +15,6 @@
 #include <arpa/inet.h>
 
 #include "IPC_SOCK_common.h"
-#include "IPC_SOCK_server.h"
-
-
-
-/* select connection type */
-#define IDS_CONNECT
-
-#define  CLI_MAX           6
 
 static client_info list[CLI_MAX] = {0};
 
@@ -76,61 +71,6 @@ void* recv_msg_from_server(void *arg) {
         }
     }
     return NULL;
-}
-
-
-/* defult : UDS connect */
-/* if want select IDS connect -> please '#define IDS_CONNECT' */
-
-int client_connect_init(sock_info *client) {
-
-#ifdef IDS_CONNECT
-
-    client->fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (client->fd == -1) {
-        perror("Socket error");
-        return -1;
-    } else {
-        printf("Socket[IDS] successfully created.\n");
-        bzero(&client->addr.ids, sizeof(client->addr.ids));
-    }
-
-    client->addr.ids.sin_family = AF_INET;
-    client->addr.ids.sin_port = htons(PORT);
-    client->addr.ids.sin_addr.s_addr = inet_addr(IP); //in_addr_t inet_addr(const char *cp);
-    client->len= sizeof(struct sockaddr_un);
-
-    int result = connect(client->fd, (struct sockaddr *)&client->addr.uds, client->len);
-    if (result == -1) {
-        perror("Connect error");
-        close(client->fd);
-        return -2;
-    }
-
-#else
-
-    client->fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (client->fd == -1) {
-        perror("Socket error");
-        return -1;
-    } else {
-        printf("Socket[UDS] successfully created.\n");
-    }
-
-    client->addr.uds.sun_family = AF_UNIX;
-    strcpy(client->addr.uds.sun_path, PATH);
-    client->len= sizeof(struct sockaddr_un);
-
-    int result = connect(client->fd, (struct sockaddr *)&client->addr.uds, client->len);
-    if (result == -1) {
-        perror("Connect error");
-        close(client->fd);
-        return -2;
-    }
-
-#endif
-
-    return 0;
 }
 
 

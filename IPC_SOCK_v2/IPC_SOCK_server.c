@@ -1,4 +1,8 @@
 
+#include "IPC_SOCK_config.h"
+
+#include <asm-generic/errno-base.h>
+#include <asm-generic/errno.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <string.h>
@@ -12,13 +16,6 @@
 #include <errno.h>
 
 #include "IPC_SOCK_common.h"
-#include "IPC_SOCK_server.h"
-
-/* select connection type */
-#define IDS_CONNECT
-
-
-#define CLI_MAX   5
 
 
 static sock_info server;
@@ -171,88 +168,15 @@ void* monitor_disconnect_task(void *arg) {
 
 
 
-/* defult : UDS connect */
-/* if want select IDS connect -> please '#define IDS_CONNECT' */
-int server_connect_init(sock_info *server) {
+int set_nonblocking(int fd) {
 
-#ifdef IDS_CONNECT
-
-    server->fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server->fd == -1) {
-        perror("Socket error");
-        return -1;
-    } else {
-        printf("Socket[IDS] successfully created.\n");
-        bzero(&server->addr.ids, sizeof(server->addr.ids));
-    }
-
-    printf("socket fd %d\n", server->fd);
-
-    server->addr.ids.sin_family = AF_INET;
-    server->addr.ids.sin_port = htons(PORT);
-    server->addr.ids.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    server->len = sizeof(struct sockaddr_in);
-
-    int bind1_res = bind(server->fd, (struct sockaddr *)&server->addr.ids, server->len);
-    if (bind1_res == -1) {
-        perror("Bind error");
-        return -2;
-    }
-
-
-    int listen1_res = listen(server->fd, 5);
-    if (listen1_res == -1) {
-        perror("Listen error");
-        return -3;
-    }
-
-#else
-
-    server->fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (server->fd == -1) {
-        perror("Socket error");
-        return -1;
-    } else {
-        printf("Socket[UDS] successfully created.\n");
-    }
-
-    printf("socket fd %d\n", server->fd);
-
-    unlink(PATH);
-    server->addr.uds.sun_family = AF_UNIX;
-    strcpy(server->addr.uds.sun_path, PATH);
-    server->len = sizeof(struct sockaddr_un);
-
-    int bind2_res = bind(server->fd, (struct sockaddr *)&server->addr.uds, server->len);
-    if (bind2_res == -1) {
-        perror("Bind error");
-        return -2;
-    }
-
-    printf("server path: %s\n", server->addr.uds.sun_path);
-
-    int listen2_res = listen(server->fd, 5);
-    if (listen2_res == -1) {
-        perror("Listen error");
-        return -3;
-    }
-
-#endif
-
-    return 0;
-}
-
-
-int set_nonblocking(int client_fd) {
-
-    int flag = fcntl(client_fd, F_GETFL, 0);
+    int flag = fcntl(fd, F_GETFL, 0);
     if (flag < 0) {
         perror("fcntl(F_GETFL)");
         return -1;
     }
 
-    if (fcntl(client_fd, F_SETFL, flag | O_NONBLOCK) == -1) {
+    if (fcntl(fd, F_SETFL, flag | O_NONBLOCK) == -1) {
         perror("fcntl(F_SETFL)");
         return -2;
     }
@@ -289,7 +213,7 @@ int main() {
     }
 
     struct epoll_event ev;
-    ev.events = EPOLLIN;
+    ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = server.fd;
 
     int c_res = epoll_ctl(efd, EPOLL_CTL_ADD, server.fd, &ev);
@@ -298,7 +222,7 @@ int main() {
         return -2;
     }
 
-
+    set_nonblocking(server.fd)  ;
     struct epoll_event events[10];
 
     while (1) {
@@ -318,7 +242,16 @@ int main() {
                     socklen_t len = sizeof(adr);
                     int client_fd = accept(server.fd, (struct sockaddr *)&adr, &len);
                     if (client_fd < 0) {
+                        //backlog is empty
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            break;
+                        }
+                        //interrupted system call
+                        if (errno == EINTR) {
+                            continue;
+                        }
                         perror("accept");
+                        break;
                     }
 
                     //set new client socket to non-blocking
@@ -340,17 +273,25 @@ int main() {
                 char buff[1024];
 
                 //read data from client
-                ssize_t count = read(client_fd, buff, sizeof(buff));
-                while (count > 0) {
-                    write(STDOUT_FILENO, buff, count);
-                }
+                ssize_t bytes = read(client_fd, buff, sizeof(buff));
+                if (bytes > 0) {
+/*
+                    printf("Dump (%zd bytes): ", bytes);
+                    for (ssize_t i = 0; i < bytes; i++) {
+                        printf("%02X ", (unsigned char)buff[i]);
+                    }
+                    printf("\n");
+*/
+                    buff[bytes] = '\0';
+                    printf("Recv: %s, bytes: %d\n", buff, (int)bytes);
 
-                if (count == 0) {
+                    memset(buff, 0, sizeof(buff));
+                } else if (bytes == 0) {
                     printf("Client %d disconnected.\n", client_fd);
                     close(client_fd);
-                } else if (count < 0) {
-                    //EAGAIN ??
-                    if (errno != EAGAIN) {
+                } else if (bytes < 0) {
+                    //EAGAIN -> no data at the moment -> continue read
+                    if (errno != EAGAIN || errno != EWOULDBLOCK) {
                         perror("read");
                         close(client_fd);
                     }

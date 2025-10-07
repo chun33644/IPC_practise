@@ -10,9 +10,7 @@
 #include <stdbool.h>
 #include <netinet/in.h>
 
-
-
-#define  MSG_MAX           100
+#include "IPC_SOCK_config.h"
 
 
 typedef union _sock_type {
@@ -29,7 +27,7 @@ typedef struct _sock_info {
 
 
 typedef enum _error_code {
-    ERROR_EXCEEDED_CONEECTIONS_NUM = 1,
+    ERROR_EXCEEDED_CONNECTIONS_NUM = 1,
 
 
 } error_code;
@@ -59,6 +57,12 @@ int unlock(pthread_mutex_t *mutex, const char *func_name);
 
 /* join thread & close fd & memset info */
 int error_handler(client_info *list);
+
+
+/* defult : UDS connect */
+/* if want select IDS connect -> please '#define IDS_CONNECT' */
+int server_connect_init(sock_info *server);
+int client_connect_init(sock_info *client);
 
 
 #endif

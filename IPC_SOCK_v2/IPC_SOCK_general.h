@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <netinet/in.h>
 #include <sys/epoll.h>
+#include <mqueue.h>
 
 #include "IPC_SOCK_config.h"
 
@@ -37,16 +38,30 @@ typedef struct _sock_info {
 
 } sock_info;
 
+
 typedef struct _package {
     int header;
     char msg[MSG_MAX];
+    int payload_len;
     //error_code err;
 } package;
+
+
+// for notify something of status
+typedef void (*callback)(mqd_t mq_d, package *pkg);
+
+typedef struct _msqueue_info{
+    mqd_t mq_d;
+    int flag;
+    struct mq_attr mq_att;
+    callback notify_callback;
+} msgqueue_info;
 
 
 typedef struct _client_info {
     sock_info s_info;
     package pkg;
+    msgqueue_info m_info;
     pthread_t rev_pid;
     pthread_t sen_pid;
     bool in_use;
@@ -66,12 +81,23 @@ int unlock(pthread_mutex_t *mutex, const char *func_name);
 int error_handler(client_info *list);
 
 
+/* in_use (false) : find the space from lookup table */
+/* in_use (true) : find exsiting member from lookup table */
+client_info* find_Space_or_Member(int fd, bool in_use, client_info *table);
 
-/* find (in_use == false) from array for management list */
-client_info* add_member(client_info *list);
 
-/* release from management list */
-int release_member(int fd, client_info *list);
+/* release from lookup table */
+void release_member(int fd, client_info *table);
+
+
+/* request a message queue qd */
+int msgqueue_req(const char *link, int flag, mode_t mode, msgqueue_info *info);
+
+
+
+/* register callback function */
+void register_callback_func(client_info *ptr, callback cb);
+
 
 
 

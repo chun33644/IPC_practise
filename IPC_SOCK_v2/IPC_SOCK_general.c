@@ -1,3 +1,4 @@
+#include "IPC_SOCK_config.h"
 
 #include <stdio.h>
 #include <sys/epoll.h>
@@ -9,9 +10,9 @@
 #include <stdbool.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <mqueue.h>
 
 #include "IPC_SOCK_general.h"
-#include "IPC_SOCK_config.h"
 
 /* mutex lock */
 int lock(pthread_mutex_t *mutex, const char *func_name) {
@@ -53,40 +54,86 @@ int error_handler(client_info *list) {
 }
 
 
-/* find (in_use == false) from array for management list */
-client_info* add_member(client_info *list) {
+/* in_use (false) : find the space from lookup table */
+/* in_use (true) : find exsiting member from lookup table */
+client_info* find_Space_or_Member(int fd, bool in_use, client_info *table) {
 
     for (int idx = 0; idx < CLI_MAX; idx ++) {
 
-        if (!list[idx].in_use) {
-            return &list[idx];
-        } else if (list[idx].in_use) {
-            continue;
+        if (!in_use) {
+            //find space
+            if (!table[idx].in_use) {
+                return &table[idx];
+            } else if (table[idx].in_use) {
+                continue;
+            }
+        } else if (in_use) {
+            //find member
+            if (fd == table[idx].s_info.fd) {
+                return &table[idx];
+            } else {
+                continue;
+            }
         }
-
     }
     return NULL;
+
 }
 
-
-/* release from management list */
-int release_member(int fd, client_info *list) {
+/* release from lookup table */
+void release_member(int fd, client_info *table) {
 
     for(int idx = 0; idx < CLI_MAX; idx ++) {
 
-        if (fd != list[idx].s_info.fd) {
+        if (fd != table[idx].s_info.fd) {
             continue;
         } else {
-            list[idx].in_use = false;
-            printf("fd(%d) ready to release from list.\n", list->s_info.fd);
-            memset(&list[idx], 0, sizeof(list[idx]));
-            return 0;
+            table[idx].in_use = false;
+            printf("fd(%d) ready to release from table.\n", table->s_info.fd);
+            memset(&table[idx], 0, sizeof(table[idx]));
+            return;
         }
 
     }
     printf("delete fail\n");
-    return -1;
+
 }
+
+
+
+/* request a message queue qd */
+int msgqueue_req(const char *link, int flag, mode_t mode, msgqueue_info *info) {
+
+    info->mq_att.mq_maxmsg = 10;
+    info->mq_att.mq_msgsize = sizeof(package);
+
+    if (mode) {
+        mq_unlink(link);
+        info->mq_d = mq_open(link, flag, mode, &info->mq_att);
+        if (info->mq_d < 0) {
+            perror("mq_open");
+            return -1;
+        }
+    } else {
+        info->mq_d = mq_open(link, flag);
+        if (info->mq_d < 0) {
+            perror("mq_open");
+            return -2;
+        }
+    }
+
+    return 0;
+}
+
+
+/* register callback function */
+void register_callback_func(client_info *ptr, callback cb) {
+
+    ptr->m_info.notify_callback = cb;
+
+}
+
+
 
 
 /* setting fd flag (O_NONBLOCK) */
@@ -250,12 +297,13 @@ int client_connect_init(sock_info *client) {
     client->addr.ids.sin_addr.s_addr = inet_addr(IP); //in_addr_t inet_addr(const char *cp);
     client->len= sizeof(struct sockaddr_un);
 
-    int result = connect(client->fd, (struct sockaddr *)&client->addr.uds, client->len);
+    int result = connect(client->fd, (struct sockaddr *)&client->addr.ids, client->len);
     if (result == -1) {
         perror("Connect error");
         close(client->fd);
         return -2;
     }
+    printf("c_fd %d\n", client->fd);
 
 #else
 

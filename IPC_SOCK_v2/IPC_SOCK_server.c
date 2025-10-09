@@ -3,9 +3,11 @@
 
 #include <asm-generic/errno-base.h>
 #include <asm-generic/errno.h>
+#include <mqueue.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <string.h>
+#include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -29,44 +31,24 @@ static int epoll_fd;
 static pthread_t pid;
 
 
+void connect_notify(mqd_t mq_d, package *pkg) {
 
-/* new client connect */
-void accept_task(int serfd) {
+    const char *msg = "[Server]: Connection request received.";
+    strcpy(pkg->msg, msg);
+    pkg->payload_len = sizeof(*msg);
 
-    while (1) {
-
-        int c_fd = accept(serfd, NULL, NULL);
-        if (c_fd < 0) {
-            //check error
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            }
-
-            if (errno == EINTR) {
-                continue;
-            }
-
-            perror("accept4");
-            break;
-        }
-
-        //add info to list
-        client_info *space = add_member(client_list);
-        if (space == NULL) {
-            printf("buff is full");
-            close(c_fd);
+    int res = mq_send(mq_d, (const char*)pkg, sizeof(*pkg), 0);
+    if (res < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return;
         }
-        space->in_use = true;
-        space->s_info.fd = c_fd;
-
-        set_nonblocking(space->s_info.fd);
-        epoll_add(epoll_fd, &space->s_info);
-
-
+        perror("mq_send");
+        mq_close(mq_d);
+        return;
     }
-
+    printf("(%s) ok!\n", __func__);
 }
+
 
 
 /* received msg */
@@ -88,17 +70,75 @@ void recv_task(struct epoll_event *ev) {
         memset(buff, 0, sizeof(buff));
     } else if (bytes == 0) {
         printf("fd(%d) disconnected\n", ev->data.fd);
-        release_member(ev->data.fd, client_list);
-        epoll_delete(epoll_fd, ev);
-        close(ev->data.fd);
     }
 
 }
 
 
+void accept_task(client_info *table) {
+
+    while (1) {
+
+        int c_fd = accept(server.fd, NULL, NULL);
+        if (c_fd < 0) {
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+
+            if (errno == EINTR) {
+                continue;
+            }
+
+            perror("accept4");
+            break;
+        }
+
+
+        client_info *ptr = find_Space_or_Member(0, false, table);
+        if (ptr == NULL) {
+            printf("no space in client_list, is full !!\n");
+            close(c_fd);
+            break;
+        } else {
+            ptr->in_use = true;
+            ptr->s_info.fd = c_fd;
+
+            // setting NONBLOCK
+            set_nonblocking(ptr->s_info.fd);
+
+            // fd add to epoll interest list
+            epoll_add(epoll_fd, &ptr->s_info);
+        }
+
+        //register msgququ for something status to notify client
+
+        //int flag = O_CREAT | O_EXCL | O_WRONLY;
+        //printf("flag %d\n", flag);
+
+        int q_res = msgqueue_req(MSGQ_LINK, O_CREAT | O_EXCL | O_NONBLOCK | O_WRONLY, 0600, &ptr->m_info);
+        if (q_res < 0) {
+            perror("mq_open");
+            //epoll_delete(epoll_fd, &ptr->s_info.ev);
+            //close(c_fd);
+            //memset(ptr, 0, sizeof(client_info));
+            //continue;
+        } else {
+            printf("mq_d %d\n", ptr->m_info.mq_d);
+            register_callback_func(ptr, connect_notify);
+            ptr->m_info.notify_callback(ptr->m_info.mq_d, &ptr->pkg);
+        }
+
+    }
+
+}
+
+
+
+
 void* epoll_monitor(void *arg) {
 
-    int *serfd = (int *)arg;
+    client_info *c_table = (client_info *)arg;
 
     while (1) {
 
@@ -107,22 +147,24 @@ void* epoll_monitor(void *arg) {
             perror("epoll_wait");
             break;
         }
-        printf("check wait num: %d\n", n_evn);
+        //printf("check wait num: %d\n", n_evn);
 
         int fd = 0;
         for (int idx = 0; idx < MONITOR_MAX; idx ++) {
             fd = events[idx].data.fd;
-            if (fd == *serfd) {
-                //new client
-                accept_task(*serfd);
+            if (fd == server.fd) {
+               accept_task(c_table);
             } else {
-                //old client
                 uint32_t even = events[idx].events;
-                //check events --> call recv/send/error
+
                 if (even & EPOLLIN) {
                     recv_task(&events[idx]);
                 } else if (even & EPOLLOUT) {
                     //send_task
+                } else if (even & EPOLLRDHUP) {
+                    //disconnected
+                    epoll_delete(epoll_fd, &events[idx]);
+                    close(events[idx].data.fd);
                 }
             }
         }
@@ -155,7 +197,7 @@ int main() {
     epoll_add(epoll_fd, &server);
 
     //epoll_monitor
-    int p_res = pthread_create(&pid, NULL, epoll_monitor, (int *)&server.fd);
+    int p_res = pthread_create(&pid, NULL, epoll_monitor, (client_info *)&client_list);
     if (p_res < 0) {
         perror("pthread_create");
     }

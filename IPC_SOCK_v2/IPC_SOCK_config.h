@@ -20,19 +20,19 @@
 /**** IPC_SOCK_SERVER ****/
 
 // for manage clients of connections count
-#define CLI_MAX   2
+#define CLI_MAX   3
 
 // for epoll monitor buff
 #define MONITOR_MAX     10
 
-// IDS argument */
+// IDS argument
 #define  PORT              8080
 #define  IP                "127.0.0.1"
 
-// UDS argument */
+// UDS argument
 #define  PATH              "socketUDS"
 
-
-
+// Meaage Queue Link
+#define  MSGQ_LINK         "/MSGQ_NOTI"
 
 

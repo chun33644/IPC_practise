@@ -15,317 +15,159 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#include "IPC_SOCK_common.h"
+#include "IPC_SOCK_general.h"
 
 
 static sock_info server;
 
-static client_info client_info_list[CLI_MAX] = {0};
+static client_info client_list[CLI_MAX] = {0};
 
-static pthread_t pid_1;
-static pthread_t pid_2;
+static struct epoll_event events[MONITOR_MAX] = {0};
 
-static int stopAll_flag = 1;
+static int epoll_fd;
 
-static package global_pkg = {0}; //for test race conditions
-
-static pthread_mutex_t mutex;
-
-void* recv_msg_from_client(void *arg) {
-
-    while (stopAll_flag) {
-
-        client_info *ptr = (client_info *)arg;
-        package temp = {0};
-
-        if (!ptr->start_flag) {
-            break;
-        } else if (ptr->start_flag) {
-
-            ssize_t r_bytes = recv(ptr->client.fd, &temp, sizeof(package), 0);
-            if (r_bytes == -1) {
-                perror("Recv error");
-                break;
-            } else if (r_bytes > 0) {
-                lock(&mutex, __func__);
-                memcpy(&ptr->pkg, &temp, sizeof(package));
-                unlock(&mutex, __func__);
-
-                printf("fd %d mag:%s (bytes:%zd)\n", ptr->client.fd, ptr->pkg.msg, r_bytes);
-            } else if (r_bytes == 0) {
-                //disconnected
-                error_handler(ptr);
-                return NULL;
-            }
-        }
-    }
-    return NULL;
-}
+static pthread_t pid;
 
 
 
-void* send_msg_to_client(void *arg) {
+/* new client connect */
+void accept_task(int serfd) {
 
-    while (stopAll_flag) {
+    while (1) {
 
-        client_info *ptr = (client_info *)arg;
-
-        if (!ptr->start_flag) {
-            break;
-        } else if (ptr->start_flag) {
-            sleep(1);
-            ssize_t s_bytes = send(ptr->client.fd, &ptr->pkg, sizeof(package), 0);
-            if (s_bytes == -1) {
-                perror("Send error");
+        int c_fd = accept(serfd, NULL, NULL);
+        if (c_fd < 0) {
+            //check error
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             }
-            //printf("(%s) fd %d, msg: %s\n", __func__, ptr->client.fd, ptr->pkg.msg);
-        }
-    }
-    return NULL;
-}
 
-static client_info* find_client_space(client_info *list) {
-
-    for (int idx = 0; idx < CLI_MAX; idx ++) {
-
-        if (!list[idx].in_use) {
-            return &list[idx];
-        } else if (list[idx].in_use) {
-            continue;
-        }
-    }
-    return NULL;
-}
-
-/* if create thread fail, it will stop (join_) thread and (close_) fd */
-void* monitor_connect_task(void *arg) {
-
-    while (stopAll_flag) {
-        int fd = accept(*(int *)arg, NULL, NULL);
-        if (fd < 0) {
-            perror("Accept error");
-            return NULL;
-        } else if (fd > 0) {
-            client_info *space = find_client_space(client_info_list);
-            if (!space) {
-                printf("Array full\n");
+            if (errno == EINTR) {
                 continue;
             }
-            space->client.fd = fd;
-            space->start_flag = 1;
-            int recv_res = pthread_create(&space->r_pid, NULL, recv_msg_from_client, (client_info *)space);
-            int send_res = pthread_create(&space->s_pid, NULL, send_msg_to_client, (client_info *)space);
-            if (recv_res != 0 || send_res != 0) {
-                printf("fd %d recv or send thread create failed....\n", space->client.fd);
-                error_handler(space);
-                return NULL;
+
+            perror("accept4");
+            break;
+        }
+
+        //add info to list
+        client_info *space = add_member(client_list);
+        if (space == NULL) {
+            printf("buff is full");
+            close(c_fd);
+            return;
+        }
+        space->in_use = true;
+        space->s_info.fd = c_fd;
+
+        set_nonblocking(space->s_info.fd);
+        epoll_add(epoll_fd, &space->s_info);
+
+
+    }
+
+}
+
+
+/* received msg */
+void recv_task(struct epoll_event *ev) {
+
+    char buff[MSG_MAX] = {0};
+
+    ssize_t bytes = recv(ev->data.fd, buff, MSG_MAX, MSG_DONTWAIT);
+    if (bytes < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            printf("read finished\n");
+            return;
+        }
+        perror("recv");
+        epoll_delete(epoll_fd, ev);
+        close(ev->data.fd);
+    } else if (bytes > 0) {
+        printf("fd(%d) Recv msg: %s\n", ev->data.fd, buff);
+        memset(buff, 0, sizeof(buff));
+    } else if (bytes == 0) {
+        printf("fd(%d) disconnected\n", ev->data.fd);
+        release_member(ev->data.fd, client_list);
+        epoll_delete(epoll_fd, ev);
+        close(ev->data.fd);
+    }
+
+}
+
+
+void* epoll_monitor(void *arg) {
+
+    int *serfd = (int *)arg;
+
+    while (1) {
+
+        int n_evn = epoll_wait(epoll_fd, events, MONITOR_MAX, -1);
+        if (n_evn < 0) {
+            perror("epoll_wait");
+            break;
+        }
+        printf("check wait num: %d\n", n_evn);
+
+        int fd = 0;
+        for (int idx = 0; idx < MONITOR_MAX; idx ++) {
+            fd = events[idx].data.fd;
+            if (fd == *serfd) {
+                //new client
+                accept_task(*serfd);
+            } else {
+                //old client
+                uint32_t even = events[idx].events;
+                //check events --> call recv/send/error
+                if (even & EPOLLIN) {
+                    recv_task(&events[idx]);
+                } else if (even & EPOLLOUT) {
+                    //send_task
+                }
             }
-            space->in_use = true;
-            //printf("fd %d (%s)\n", space->client.fd, __func__);
-            //addr info .....
-        }
-    }
-    printf("%s\n", __func__);
-    return NULL;
-}
-
-void stop_listen(int *listen_fd) {
-
-    shutdown(*listen_fd, SHUT_RDWR);
-    close(*listen_fd);
-
-}
-
-void* monitor_disconnect_task(void *arg) {
-
-    client_info *ptr = (client_info *)arg;
-    static int count = 0;
-
-    printf("waiting for client to connect within 5 seconds....\n");
-
-    while (stopAll_flag) {
-
-        sleep(5);
-        for (int idx = 0; idx < CLI_MAX; idx ++) {
-            if (!ptr[idx].start_flag) {
-                count ++;
-            }
         }
 
-        if (count == CLI_MAX) {
-            printf("prepare to close the main thread\n");
-            stopAll_flag = 0;
-            stop_listen(&server.fd);
-        } else if (count < CLI_MAX) {
-            //reset
-            count = 0;
+        for (int i = 0; i < MONITOR_MAX; i++) {
+            printf("wait[%d] fd: %d\n", i, events[i].data.fd);
         }
+
     }
-    printf("%s\n", __func__);
-    return NULL;
+
+   return NULL;
 }
-
-
-
-int set_nonblocking(int fd) {
-
-    int flag = fcntl(fd, F_GETFL, 0);
-    if (flag < 0) {
-        perror("fcntl(F_GETFL)");
-        return -1;
-    }
-
-    if (fcntl(fd, F_SETFL, flag | O_NONBLOCK) == -1) {
-        perror("fcntl(F_SETFL)");
-        return -2;
-    }
-
-    return 0;
-}
-
-
 
 
 int main() {
 
-
+    //sock_create
     int sock_init = server_connect_init(&server);
     if (sock_init < 0) {
         printf("Socket init failed.\n");
     }
 
-    //Mutex
-    int m_res = pthread_mutex_init(&mutex, NULL);
-    if (m_res != 0) {
-        perror("Mutex initialization failed");
+    //set_nonblock --> (server.fd)
+    set_nonblocking(server.fd);
+
+    //request a epoll fd
+    epoll_req(&epoll_fd);
+
+    //epoll_add --->(server.fd) ... add to epoll interest list
+    epoll_add(epoll_fd, &server);
+
+    //epoll_monitor
+    int p_res = pthread_create(&pid, NULL, epoll_monitor, (int *)&server.fd);
+    if (p_res < 0) {
+        perror("pthread_create");
     }
 
-
-
-
-
-
-    int efd = epoll_create1(EPOLL_CLOEXEC);
-    if (efd < 0) {
-        perror("epoll_create1");
-        return -1;
+    for (int i = 0; i < MONITOR_MAX; i++) {
+        printf("wait[%d] fd: %d\n", i, events[i].data.fd);
     }
+    pthread_join(pid, NULL);
 
-    struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
-    ev.data.fd = server.fd;
-
-    int c_res = epoll_ctl(efd, EPOLL_CTL_ADD, server.fd, &ev);
-    if (c_res < 0) {
-        perror("epoll_ctl");
-        return -2;
-    }
-
-    set_nonblocking(server.fd)  ;
-    struct epoll_event events[10];
-
-    while (1) {
-        int n_events = epoll_wait(efd, events, 10, -1);
-        if (n_events < 0) {
-            perror("epoll_wait");
-            break;
-        }
-
-        for (int idx = 0; idx < n_events; idx++) {
-
-            if (events[idx].data.fd == server.fd) {
-
-                while (1) {
-
-                    struct sockaddr_in adr;
-                    socklen_t len = sizeof(adr);
-                    int client_fd = accept(server.fd, (struct sockaddr *)&adr, &len);
-                    if (client_fd < 0) {
-                        //backlog is empty
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                            break;
-                        }
-                        //interrupted system call
-                        if (errno == EINTR) {
-                            continue;
-                        }
-                        perror("accept");
-                        break;
-                    }
-
-                    //set new client socket to non-blocking
-                    set_nonblocking(client_fd);
-
-                    //add new client socket to the epoll interest list
-                    ev.events = EPOLLIN | EPOLLET;
-                    ev.data.fd = client_fd;
-                    if (epoll_ctl(efd, EPOLL_CTL_ADD, client_fd, &ev) == -1) {
-                        perror("epoll_ctl");
-                        close(client_fd);
-                    }
-                }
-
-            } else {
-
-                //data from an existing client
-                int client_fd = events[idx].data.fd;
-                char buff[1024];
-
-                //read data from client
-                ssize_t bytes = read(client_fd, buff, sizeof(buff));
-                if (bytes > 0) {
-/*
-                    printf("Dump (%zd bytes): ", bytes);
-                    for (ssize_t i = 0; i < bytes; i++) {
-                        printf("%02X ", (unsigned char)buff[i]);
-                    }
-                    printf("\n");
-*/
-                    buff[bytes] = '\0';
-                    printf("Recv: %s, bytes: %d\n", buff, (int)bytes);
-
-                    memset(buff, 0, sizeof(buff));
-                } else if (bytes == 0) {
-                    printf("Client %d disconnected.\n", client_fd);
-                    close(client_fd);
-                } else if (bytes < 0) {
-                    //EAGAIN -> no data at the moment -> continue read
-                    if (errno != EAGAIN || errno != EWOULDBLOCK) {
-                        perror("read");
-                        close(client_fd);
-                    }
-                }
-
-            }
-
-        }
-    }
-
-
-
-
-/*
-
-
-    //Thread_1
-    int p1_res = pthread_create(&pid_1, NULL, monitor_connect_task, (int *)&server.fd);
-    if (p1_res != 0) {
-        perror("monitor_connect_task thread create failed");
-    }
-
-    //Thread_2
-    int p2_res = pthread_create(&pid_2, NULL, monitor_disconnect_task, (client_info *)client_info_list);
-    if (p2_res != 0) {
-        perror("monitor_connect_task thread create failed");
-    }
-
-    pthread_join(pid_2, NULL);
-    pthread_join(pid_1, NULL);
-*/
-
-
-    printf("%s\n", __func__);
+    //DELETE ALL REGISTER FD FROM INTEREST LIST
+    //CLOSE SERVER
+    printf("check\n");
     return 0;
-
 }
+

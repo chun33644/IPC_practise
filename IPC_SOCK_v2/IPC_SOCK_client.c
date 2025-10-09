@@ -6,73 +6,42 @@
 #include <stdio.h>
 #include <strings.h>
 #include <sys/socket.h>
-#include <string.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
-#include "IPC_SOCK_common.h"
+#include "IPC_SOCK_general.h"
 
 static client_info list[CLI_MAX] = {0};
 
-
 static pthread_mutex_t mutex;
 
-static pthread_t pid_1;
+static pthread_t pid;
 
 
-void* send_msg_to_server(void *arg) {
+int send_task(client_info *ptr) {
 
+    while (flag) {
 
-    while (1) {
+        char msg[MSG_MAX] = {0};
+        snprintf(msg, MSG_MAX, "this msg from client %d send.", ptr->s_info.fd);
 
-        client_info *ptr = (client_info *)arg;
-
-        snprintf(ptr->pkg.msg, 100, "this msg from client %d send.", ptr->client.fd);
-
-        if (!ptr->start_flag) {
-            break;
-        } else if (ptr->start_flag) {
-            ssize_t s_res = send(ptr->client.fd, &ptr->pkg, sizeof(package), 0);
-            if (s_res == -1) {
-                perror("Send error");
-                return NULL;
-            }
-
-            memset(ptr->pkg.msg, 0, sizeof(package));
-            sleep(2);
-            // printf("ready to close .... fd %d", ptr->client.fd);
-            //error_handler(ptr);
+        ssize_t s_res = send(ptr->s_info.fd, msg, sizeof(msg), 0);
+        if (s_res == -1) {
+            perror("Send error");
+            error_handler(ptr);
+            return -1;
         }
+        printf("Send msg:%s\n", msg);
+        memset(msg, 0, sizeof(msg));
+
     }
-    return NULL;
+    return 0;
 }
-
-
-void* recv_msg_from_server(void *arg) {
-
-    while(1) {
-
-        client_info *ptr = (client_info *)arg;
-        if (!ptr->start_flag) {
-            break;
-        } else if (ptr->start_flag) {
-
-            ssize_t r_res = recv(ptr->client.fd, &ptr->pkg, sizeof(package), 0);
-            if (r_res < 0) {
-                perror("Recv error");
-                continue;
-            }
-
-            printf("%s\n", ptr->pkg.msg);
-        }
-    }
-    return NULL;
-}
-
 
 
 void* create_multiple_clientfd(void *arg) {
@@ -80,30 +49,21 @@ void* create_multiple_clientfd(void *arg) {
     client_info *ptr = (client_info *)arg;
 
     for (int idx = 0; idx < CLI_MAX; idx ++) {
-        int res = client_connect_init(&ptr[idx].client);
+        int res = client_connect_init(&ptr[idx].s_info);
         if (res < 0) {
-            printf("idx[%d]create client failed.\n", idx);
+            printf("idx[%d]create s_info failed.\n", idx);
             return NULL;
         }
-        printf("[%d]fd:%d\n", idx, ptr[idx].client.fd);
-
-        ptr[idx].start_flag = 1;
-        int s_res = pthread_create(&(ptr[idx].s_pid), NULL, send_msg_to_server, (client_info *)&ptr[idx]);
-        int r_res = pthread_create(&(ptr[idx].r_pid), NULL, recv_msg_from_server, (client_info *)&ptr[idx]);
-        if (s_res != 0 || r_res != 0) {
-            printf("list[%d] recv or send thread create failed....\n", idx);
-            error_handler(&ptr[idx]);
-        }
+        printf("[%d]fd:%d\n", idx, ptr[idx].s_info.fd);
         ptr[idx].in_use = true;
-    }
 
-    for (int idx = 0; idx < CLI_MAX; idx ++) {
-        pthread_join(ptr[idx].s_pid, NULL);
-        pthread_join(ptr[idx].r_pid, NULL);
-    }
+        send_task(&ptr[idx]);
 
+    }
     return NULL;
 }
+
+
 
 int main() {
 
@@ -113,15 +73,17 @@ int main() {
         perror("Mutex initialization failed");
     }
 
-    //Thread_1
-    int p1_res = pthread_create(&pid_1, NULL, create_multiple_clientfd, (client_info *)list);
+    //Thread
+    int p1_res = pthread_create(&pid, NULL, create_multiple_clientfd, (client_info *)list);
     if (p1_res != 0) {
         perror("Thread 2 create failed");
     }
 
-    pthread_join(pid_1, NULL);
+    pthread_join(pid, NULL);
 
-    //close
+    for (int idx = 0; idx < CLI_MAX; idx ++) {
+        close(list[idx].s_info.fd);
+    }
 
     return 0;
 

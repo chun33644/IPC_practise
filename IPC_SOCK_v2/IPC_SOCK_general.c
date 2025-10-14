@@ -1,5 +1,7 @@
 #include "IPC_SOCK_config.h"
 
+#include <asm-generic/socket.h>
+#include <errno.h>
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -39,7 +41,9 @@ int unlock(pthread_mutex_t *mutex, const char *func_name) {
 }
 
 
+
 /* closed thread and fd */
+/*
 int error_handler(client_info *list) {
 
     list->start_flag = 0;
@@ -52,7 +56,7 @@ int error_handler(client_info *list) {
 
     return 0;
 }
-
+*/
 
 /* in_use (false) : find the space from lookup table */
 /* in_use (true) : find exsiting member from lookup table */
@@ -69,7 +73,7 @@ client_info* find_Space_or_Member(int fd, bool in_use, client_info *table) {
             }
         } else if (in_use) {
             //find member
-            if (fd == table[idx].s_info.fd) {
+            if (fd == table[idx].s_info.fd || fd == table[idx].m_info.mq_d) {
                 return &table[idx];
             } else {
                 continue;
@@ -102,22 +106,23 @@ void release_member(int fd, client_info *table) {
 
 
 /* request a message queue qd */
-int msgqueue_req(const char *link, int flag, mode_t mode, msgqueue_info *info) {
+int msgqueue_req(const char *link, int flag, mode_t mode, mqd_t *mq_d, struct mq_attr *attr) {
 
-    info->mq_att.mq_maxmsg = 10;
-    info->mq_att.mq_msgsize = sizeof(package);
+    attr->mq_maxmsg = 10;
+    attr->mq_msgsize = MSG_MAX;
 
     if (mode) {
         mq_unlink(link);
-        info->mq_d = mq_open(link, flag, mode, &info->mq_att);
-        if (info->mq_d < 0) {
+        *mq_d = mq_open(link, flag, mode, attr);
+        if (*mq_d < 0) {
             perror("mq_open");
             return -1;
         }
     } else {
-        info->mq_d = mq_open(link, flag);
-        if (info->mq_d < 0) {
+        *mq_d = mq_open(link, flag);
+        if (*mq_d < 0) {
             perror("mq_open");
+            printf("errno %d : %s\n", errno, strerror(errno));
             return -2;
         }
     }
@@ -167,19 +172,19 @@ int epoll_req(int *new_efd) {
 }
 
 /* epoll fd and listen fd add to interst list */
-int epoll_add(int epoll_fd, sock_info *info) {
+int epoll_add(int epoll_fd, int fd, struct epoll_event *ev) {
 
-    info->ev.events = EPOLLIN | EPOLLET;
-    info->ev.data.fd = info->fd;
+    ev->events = EPOLLIN | EPOLLET;
+    ev->data.fd = fd;
 
-    int c_res = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, info->fd, &info->ev);
+    int c_res = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, ev);
     if (c_res < 0) {
         perror("epoll_ctl(EPOLL_CTL_ADD)");
-        close(info->fd);
+        close(fd);
         return -1;
     }
 
-    printf("fd(%d) added to epoll interst list.\n", info->fd);
+    printf("fd(%d) added to epoll interst list.\n", fd);
     return 0;
 }
 

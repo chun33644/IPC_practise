@@ -3,7 +3,7 @@
 /**** IPC_SOCK_COMMON ****/
 
 // struct package buff size
-#define  MSG_MAX           100
+#define  MSG_MAX           200
 
 // select socket connection type
 #define IDS_CONNECT
@@ -20,7 +20,7 @@
 /**** IPC_SOCK_SERVER ****/
 
 // for manage clients of connections count
-#define CLI_MAX   3
+#define CLI_MAX   1
 
 // for epoll monitor buff
 #define MONITOR_MAX     10
@@ -33,6 +33,7 @@
 #define  PATH              "socketUDS"
 
 // Meaage Queue Link
-#define  MSGQ_LINK         "/MSGQ_NOTI"
+#define  MSGQ_LINK_SIZE    100
+
 
 

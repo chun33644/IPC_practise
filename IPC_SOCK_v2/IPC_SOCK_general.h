@@ -60,7 +60,7 @@ typedef struct _msqueue_info{
     char link[MSGQ_LINK_SIZE];
     package m_pkg;
     mqd_t mq_d;
-    int conn_status;
+    bool conn_status;
     struct mq_attr mq_att;
     struct epoll_event m_ev;
     callback notify_callback;
@@ -73,7 +73,6 @@ typedef struct _client_info {
     pthread_t detach_pid;
     pthread_t pid;
     bool in_use;
-    int start_flag;
 } client_info;
 
 
@@ -96,7 +95,7 @@ client_info* find_Space_or_Member(int fd, bool in_use, client_info *table);
 
 
 /* release from lookup table */
-void release_member(int fd, client_info *table);
+void release_member(client_info *ptr);
 
 
 /* request a message queue qd */
@@ -116,11 +115,10 @@ int set_nonblocking(int fd);
 int epoll_req(int *new_efd);
 
 /* epoll fd and listen fd add to interst list */
-int epoll_add(int epoll_fd, int fd, struct epoll_event *ev);
+int epoll_add(int epoll_fd, int fd, struct epoll_event ev);
 
 /* delete fd from interst list */
-int epoll_delete(int epoll_fd, struct epoll_event *close_ev);
-
+int epoll_delete(int epoll_fd, int fd);
 
 
 /* defult : UDS connect */

@@ -4,6 +4,8 @@
 #include <asm-generic/errno-base.h>
 #include <asm-generic/errno.h>
 #include <bits/time.h>
+#include <bits/types/__sigval_t.h>
+#include <bits/types/sigevent_t.h>
 #include <fcntl.h>
 #include <mqueue.h>
 #include <stddef.h>
@@ -11,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -38,113 +41,129 @@ static struct epoll_event epoll_evns[MONITOR_MAX] = {0};
 
 
 
-void* final_connect_check(void *arg) {
+void msgq_ack_confirm(union sigval sv){
 
-    client_info *ptr = (client_info *)arg;
+    client_info * ptr = (client_info *)sv.sival_ptr;
 
     unsigned int prio = 0;
+    char ack[MSG_MAX] = {0};
 
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 10;
+    while(1) {
 
-    while (1) {
-
-        lock(&mutex, __func__);
-        memset(&ptr->m_info.m_pkg.msg, 0, sizeof(ptr->m_info.m_pkg.msg));
-        unlock(&mutex, __func__);
-
-        ssize_t r_byte = mq_timedreceive(ptr->m_info.mq_d, (char *)&ptr->m_info.m_pkg.msg,
-                                         sizeof(ptr->m_info.m_pkg.msg), &prio, &ts);
-        if (r_byte < 0){
-            perror("mq_timedreceive");
+        ssize_t rbyte = mq_receive(ptr->m_info.mq_d, ack, sizeof(ack), &prio);
+        if (rbyte < 0) {
+            perror("mq_receive[ACK]");
             break;
         }
 
-        printf("%s() recv msg: %s\n", __func__, ptr->m_info.m_pkg.msg);
+        //printf("%s() received '%s'\n", __func__, ack);
+        if (strcmp(ack, "[ACK]") == 0) {
+            memset(ack, 0, sizeof(ack));
 
-        //buff[strcspn(buff, "\r\n")] = '\0';
-        if (strcmp(ptr->m_info.m_pkg.msg, "[ACK]") == 0) {
+            ptr->m_info.conn_status = true;
+            ptr->s_info.s_ev.events = EPOLLIN | EPOLLET;
+            ptr->s_info.s_ev.data.ptr = ptr;
 
-            ptr->m_info.conn_status = 1;
-
-            printf ("%s() success connection (set conn_status) \n", __func__);
-            break;
+            int ectl = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, ptr->s_info.fd, &ptr->s_info.s_ev);
+            if (ectl < 0) {
+                perror("epoll_ctl(remove EPOLLONESHOT)");
+                break;
+            }
+            printf("%s() fd %d completed the init connection setting.\n", __func__, ptr->s_info.fd);
+        } else {
+            continue;
         }
+
     }
-    return NULL;
-}
 
+    printf("%s() connection init failed, will be close fd and mqd.......\n", __func__);
+
+    close(ptr->s_info.fd);
+    mq_close(ptr->m_info.mq_d);
+    release_member(ptr);
+
+}
 
 
 void register_messageQueue(client_info *ptr) {
 
 
-    set_nonblocking(ptr->s_info.fd);
-
-    //waiting for the server to send MSG Queue 'link'
     while (1) {
-        ssize_t r_byte = recv(ptr->s_info.fd, &ptr->m_info.link, 11, MSG_DONTWAIT);
+
+        //waiting for the server to send MSG Queue 'link'
+        ssize_t r_byte = recv(ptr->s_info.fd, &ptr->m_info.link, sizeof(ptr->m_info.link), 0);
         if (r_byte < 0) {
 
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                //printf("hello....\n");
-                break;
+                return;
             }
 
-            perror("recv");
+            perror("recv(msgq link)");
             break;
         }
-        printf("%s() received link '%s'\n", __func__, ptr->m_info.link);
+        printf("%s() received msg link '%s'\n", __func__, ptr->m_info.link);
 
-        int mq = msgqueue_req(ptr->m_info.link, O_NONBLOCK | O_RDWR, 0, &ptr->m_info.mq_d, &ptr->m_info.mq_att);
+        int mq = msgqueue_req(ptr->m_info.link, O_RDWR, 0, &ptr->m_info.mq_d, &ptr->m_info.mq_att);
         if (mq < 0) {
-            close(ptr->s_info.fd);
-            printf("%s() fd %d msgqueue_req error\n", __func__, ptr->s_info.fd);
+            printf("%s() fd %d create error\n", __func__, ptr->s_info.fd);
             break;
         }
 
-        epoll_add(epoll_fd, ptr->m_info.mq_d, &ptr->m_info.m_ev);
+        struct sigevent sev;
+        sev.sigev_notify = SIGEV_THREAD;
+        sev.sigev_notify_function = msgq_ack_confirm;
+        sev.sigev_value.sival_ptr = ptr;
+        sev.sigev_notify_attributes = NULL;
+
+        //final check whether receive '[ACK]' response from server
+        //if don't receive '[ACK]',
+        //epoll no more events will be notified and connect flag will always be 'false'......
+        int nres = mq_notify(ptr->m_info.mq_d, &sev);
+        if (nres < 0) {
+            perror("mq_notify");
+            break;
+        }
 
         char msg[15] = "[SYN/ACK]";
-        package temp = {0};
-
-        lock(&mutex, __func__);
-        strcpy(temp.msg, msg);
-        memset(&temp, 0, sizeof(package));
-        unlock(&mutex, __func__);
-
-
-        int s_res = mq_send(ptr->m_info.mq_d, (const char *)&temp.msg,
-                                 sizeof(temp.msg), 0);
+        int s_res = mq_send(ptr->m_info.mq_d, msg, sizeof(msg), 0);
         if (s_res < 0) {
-            if (errno != EAGAIN || errno != EWOULDBLOCK) {
-                perror("send");
-                break;
-            }
+            perror("send");
+            break;
         }
 
 
-        printf("sent %s to server ... waiting for server response[ACK]\n", temp.msg);
+
+        //printf("sent '%s' to server ... waiting for server response[ACK]\n",msg);
+
+
+        return;
 
     }
 
+    close(ptr->s_info.fd);
+    mq_close(ptr->m_info.mq_d);
+    release_member(ptr);
+
 }
 
+void create_multiple_client(client_info *table) {
 
-void create_mutiple_client(client_info *table) {
 
-    for (int idx = 0; idx < CLI_MAX; idx ++) {
+    for (int idx = 0; idx < CLI_MAX ; idx ++) {
 
         int res = client_connect_init(&table[idx].s_info);
         if (res < 0) {
-            printf("%s() connect init failed\n", __func__);
+            printf("%s() failed\n", __func__);
             continue;
         }
         table[idx].in_use = true;
-        printf("%s() fd %d\n", __func__, table[idx].s_info.fd);
+        //printf("%s() fd %d\n", __func__, table[idx].s_info.fd);
 
-        epoll_add(epoll_fd, table[idx].s_info.fd, &table[idx].s_info.s_ev);
+        set_nonblocking(table[idx].s_info.fd);
+        /* setting one-shot notification, change the setting after waiting for connection init completed */
+        table[idx].s_info.s_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+        table[idx].s_info.s_ev.data.ptr = &table[idx];
+        epoll_add(epoll_fd, table[idx].s_info.fd, table[idx].s_info.s_ev);
     }
 
 }
@@ -156,70 +175,36 @@ void* client_epoll_monitor(void *arg) {
     client_info *table = (client_info *)arg;
 
     //create client socket and add to epoll interest list
-    create_mutiple_client(table);
+    create_multiple_client(table);
 
     while (1) {
 
-        int n_evn = epoll_wait(epoll_fd, epoll_evns, MONITOR_MAX, -1);
-        if (n_evn < 0) {
+        int n = epoll_wait(epoll_fd, epoll_evns, MONITOR_MAX, -1);
+        if (n < 0) {
             perror("epoll_wait");
             break;
         }
 
-        printf("check wait num: %d\n", n_evn);
+        client_info *ptr = NULL;
+        for (int idx = 0; idx < n; idx ++) {
+            ptr = epoll_evns[idx].data.ptr;
 
-        int fd = 0;
-        for (int idx = 0; idx < MONITOR_MAX; idx ++) {
-            fd = epoll_evns[idx].data.fd;
+            if (!ptr->m_info.conn_status) {
+                /* connection initialization has not been completed */
+                printf("%s() client %-2d enter register_messageQueue()....\n", __func__, ptr->s_info.fd);
+                register_messageQueue(ptr);
 
-            client_info *temp = find_Space_or_Member(fd, true, list);
-            if (!temp) {
-                printf("%s(): not found fd/mq_d in client list\n", __func__);
-                break;
-            }
-            printf("%p\n", temp);
-
-            if (!temp->m_info.conn_status) {
-                //connection initialization has not been completed
-
-                if (fd == temp->s_info.fd) {
-                    //server send 'link' for client register messageQueue
-                    register_messageQueue(temp);
-
-                } else if (fd == temp->m_info.mq_d) {
-                    //waiting for the final server [ACK]
-                    //to setting connect flag == 1
-
-                    int pres2 = pthread_create(&temp->detach_pid, NULL, final_connect_check,
-                                               (client_info *)temp);
-                    if (pres2 < 0) {
-                        perror("pthread_create(2)");
-                        continue;
-                    }
-                    pthread_detach(temp->detach_pid);
-
-                }
-
-
-            } else if (temp->m_info.conn_status) {
-                //normal receive
-
-                if (fd == temp->s_info.fd) {
-                    //rece_task
-                } else if (fd == temp->m_info.mq_d) {
-                    //mqrece_task
+            } else if (ptr->m_info.conn_status) {
+                /* normal event task */
+                uint32_t even = epoll_evns[idx].events;
+                printf("%s() client %-2d event trigger 0x%08x\n", __func__, ptr->s_info.fd, even);
+                if (even & EPOLLIN) {
+                    //receive_task
                 }
             }
 
         }
-
-    //show epoll wait event list
-    for (int i = 0; i < MONITOR_MAX; i++) {
-            printf("wait[%d] fd: %d\n", i, epoll_evns[i].data.fd);
-        }
-
     }
-
 
     return NULL;
 }

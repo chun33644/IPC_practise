@@ -20,7 +20,7 @@
 /**** IPC_SOCK_SERVER ****/
 
 // for manage clients of connections count
-#define CLI_MAX   1
+#define CLI_MAX          5
 
 // for epoll monitor buff
 #define MONITOR_MAX     10

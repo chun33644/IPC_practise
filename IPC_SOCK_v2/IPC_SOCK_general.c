@@ -85,22 +85,16 @@ client_info* find_Space_or_Member(int fd, bool in_use, client_info *table) {
 }
 
 /* release from lookup table */
-void release_member(int fd, client_info *table) {
+void release_member(client_info *ptr) {
 
-    for(int idx = 0; idx < CLI_MAX; idx ++) {
-
-        if (fd != table[idx].s_info.fd) {
-            continue;
-        } else {
-            table[idx].in_use = false;
-            printf("fd(%d) ready to release from table.\n", table->s_info.fd);
-            memset(&table[idx], 0, sizeof(table[idx]));
-            return;
-        }
-
+    if (!ptr) {
+        printf("%s() invalid argument !\n", __func__);
+        return;
     }
-    printf("delete fail\n");
 
+
+    printf("%s() fd %d ready to release.\n", __func__, ptr->s_info.fd);
+    memset(ptr, 0, sizeof(client_info));
 }
 
 
@@ -166,42 +160,37 @@ int epoll_req(int *new_efd) {
         perror("epoll_create");
         return -1;
     }
-    printf("epoll fd %d\n", *new_efd);
+    printf("epoll  fd %d\n", *new_efd);
 
     return 0;
 }
 
 /* epoll fd and listen fd add to interst list */
-int epoll_add(int epoll_fd, int fd, struct epoll_event *ev) {
+int epoll_add(int epoll_fd, int fd, struct epoll_event ev) {
 
-    ev->events = EPOLLIN | EPOLLET;
-    ev->data.fd = fd;
-
-    int c_res = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, ev);
+    int c_res = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev);
     if (c_res < 0) {
         perror("epoll_ctl(EPOLL_CTL_ADD)");
-        close(fd);
         return -1;
     }
 
-    printf("fd(%d) added to epoll interst list.\n", fd);
+    //printf("%s() fd %d added to epoll interst list.\n", __func__, fd);
     return 0;
 }
 
 
 /* delete fd from interst list */
-int epoll_delete(int epoll_fd, struct epoll_event *close_ev) {
+int epoll_delete(int epoll_fd, int fd) {
 
-    if (!close_ev->data.fd) {
-        printf("add to epoll not yet.\n");
+    if (epoll_fd <= 0 || fd <= 0) {
+        printf("invalid argument\n");
         return -1;
     }
 
-    printf("fd(%d) ready to delete from epoll interst list.\n", close_ev->data.fd);
-    int d_res = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, close_ev->data.fd, close_ev);
+    //printf("%s() fd %d ready to delete from epoll interst list.\n", __func__, fd);
+    int d_res = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL);
     if (d_res < 0) {
         perror("epoll_ctl(EPOLL_CTL_DEL)");
-        close(close_ev->data.fd);
         return -2;
     }
 
@@ -219,11 +208,9 @@ int server_connect_init(sock_info *server) {
         perror("Socket error");
         return -1;
     } else {
-        printf("Socket[IDS] successfully created.\n");
+        printf("Socket[IDS] successfully created fd %-2d\n", server->fd);
         bzero(&server->addr.ids, sizeof(server->addr.ids));
     }
-
-    printf("socket fd %d\n", server->fd);
 
     server->addr.ids.sin_family = AF_INET;
     server->addr.ids.sin_port = htons(PORT);
@@ -251,10 +238,8 @@ int server_connect_init(sock_info *server) {
         perror("Socket error");
         return -1;
     } else {
-        printf("Socket[UDS] successfully created.\n");
+        printf("Socket[UDS] successfully created fd %-2d\n", server->fd);
     }
-
-    printf("socket fd %d\n", server->fd);
 
     unlink(PATH);
     server->addr.uds.sun_family = AF_UNIX;
@@ -293,7 +278,7 @@ int client_connect_init(sock_info *client) {
         perror("Socket error");
         return -1;
     } else {
-        printf("Socket[IDS] successfully created.\n");
+        printf("Socket[IDS] successfully created fd %-2d\n", client->fd);
         bzero(&client->addr.ids, sizeof(client->addr.ids));
     }
 
@@ -308,7 +293,6 @@ int client_connect_init(sock_info *client) {
         close(client->fd);
         return -2;
     }
-    printf("c_fd %d\n", client->fd);
 
 #else
 
@@ -317,7 +301,7 @@ int client_connect_init(sock_info *client) {
         perror("Socket error");
         return -1;
     } else {
-        printf("Socket[UDS] successfully created.\n");
+        printf("Socket[UDS] successfully created fd %-2d\n", client->fd);
     }
 
     client->addr.uds.sun_family = AF_UNIX;
